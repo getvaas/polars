@@ -84,6 +84,7 @@ def read_csv(
     truncate_ragged_lines: bool = False,
     decimal_comma: bool = False,
     glob: bool = True,
+    escape_char: str | None = None,
 ) -> DataFrame:
     r"""
     Read a CSV file into a DataFrame.
@@ -124,6 +125,8 @@ def read_csv(
     quote_char
         Single byte character used for csv quoting, default = `"`.
         Set to None to turn off special handling and escaping of quotes.
+    escape_char:
+        Single byte used to escape a quote inside a quoted field (e.g., \"). Set to None to disable.
     skip_rows
         Start reading after ``skip_rows`` rows. The header will be parsed at this
         offset. Note that we respect CSV escaping/comments when skipping rows.
@@ -278,6 +281,7 @@ def read_csv(
     """
     _check_arg_is_1byte("separator", separator, can_be_empty=False)
     _check_arg_is_1byte("quote_char", quote_char, can_be_empty=True)
+    _check_arg_is_1byte("escape_char", escape_char, can_be_empty=True)
     _check_arg_is_1byte("eol_char", eol_char, can_be_empty=False)
 
     projection, columns = parse_columns_arg(columns)
@@ -342,6 +346,7 @@ def read_csv(
                     pa.csv.ParseOptions(
                         delimiter=separator,
                         quote_char=quote_char if quote_char else False,
+                        escape_char=escape_char if escape_char else False,
                         double_quote=quote_char is not None and quote_char == '"',
                     ),
                     pa.csv.ConvertOptions(
@@ -529,6 +534,7 @@ def read_csv(
             truncate_ragged_lines=truncate_ragged_lines,
             decimal_comma=decimal_comma,
             glob=glob,
+            escape_char=escape_char,
         )
 
         if columns:
@@ -576,6 +582,7 @@ def read_csv(
                 truncate_ragged_lines=truncate_ragged_lines,
                 decimal_comma=decimal_comma,
                 glob=glob,
+                escape_char=escape_char,
             )
 
     if new_columns:
@@ -615,6 +622,7 @@ def _read_csv_impl(
     truncate_ragged_lines: bool = False,
     decimal_comma: bool = False,
     glob: bool = True,
+    escape_char: str | None = None,
 ) -> DataFrame:
     path: str | None
     if isinstance(source, (str, Path)):
@@ -680,6 +688,7 @@ def _read_csv_impl(
             truncate_ragged_lines=truncate_ragged_lines,
             decimal_comma=decimal_comma,
             glob=glob,
+            escape_char=escape_char,
         )
         if columns is None:
             return scan.collect()
@@ -715,6 +724,7 @@ def _read_csv_impl(
         low_memory,
         comment_prefix,
         quote_char,
+        escape_char,
         processed_null_values,
         missing_utf8_is_empty_string,
         try_parse_dates,
@@ -1101,6 +1111,7 @@ def scan_csv(
     retries: int = 2,
     file_cache_ttl: int | None = None,
     include_file_paths: str | None = None,
+    escape_char: str | None = None,
 ) -> LazyFrame:
     r"""
     Lazily read from a CSV file or multiple files via glob patterns.
@@ -1133,6 +1144,8 @@ def scan_csv(
     quote_char
         Single byte character used for csv quoting, default = `"`.
         Set to None to turn off special handling and escaping of quotes.
+    escape_char:
+        Single byte used to escape a quote inside a quoted field (e.g., \"). Set to None to disable.
     skip_rows
         Start reading after ``skip_rows`` rows. The header will be parsed at this
         offset. Note that we respect CSV escaping/comments when skipping rows.
@@ -1338,6 +1351,7 @@ def scan_csv(
 
     _check_arg_is_1byte("separator", separator, can_be_empty=False)
     _check_arg_is_1byte("quote_char", quote_char, can_be_empty=True)
+    _check_arg_is_1byte("escape_char", escape_char, can_be_empty=True)
 
     if isinstance(source, (str, Path)):
         source = normalize_filepath(source, check_not_directory=False)
@@ -1388,6 +1402,7 @@ def scan_csv(
         credential_provider=credential_provider_builder,
         file_cache_ttl=file_cache_ttl,
         include_file_paths=include_file_paths,
+        escape_char=escape_char
     )
 
 
@@ -1434,6 +1449,7 @@ def _scan_csv_impl(
     retries: int = 2,
     file_cache_ttl: int | None = None,
     include_file_paths: str | None = None,
+    escape_char: str | None = None
 ) -> LazyFrame:
     dtype_list: list[tuple[str, PolarsDataType]] | None = None
     if schema_overrides is not None:
@@ -1491,5 +1507,6 @@ def _scan_csv_impl(
         retries=retries,
         file_cache_ttl=file_cache_ttl,
         include_file_paths=include_file_paths,
+        escape_char=escape_char,
     )
     return wrap_ldf(pylf)

@@ -211,6 +211,7 @@ fn infer_file_schema_inner(
         bytes,
         parse_options.quote_char,
         parse_options.eol_char,
+        parse_options.escape_char,
         parse_options.comment_prefix.as_ref(),
     )
     .skip(skip_rows);
@@ -248,6 +249,7 @@ fn infer_file_schema_inner(
             header_line,
             parse_options.separator,
             parse_options.quote_char,
+            parse_options.escape_char,
             parse_options.eol_char,
         );
         if has_header {
@@ -312,6 +314,7 @@ fn infer_file_schema_inner(
             bytes,
             parse_options.quote_char,
             parse_options.eol_char,
+            parse_options.escape_char,
             parse_options.comment_prefix.as_ref(),
         )
         .skip(skip_rows);
@@ -372,6 +375,7 @@ fn infer_file_schema_inner(
             line,
             parse_options.separator,
             parse_options.quote_char,
+            parse_options.escape_char,
             parse_options.eol_char,
         );
 

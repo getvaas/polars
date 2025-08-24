@@ -58,6 +58,7 @@ pub struct CsvParseOptions {
     pub comment_prefix: Option<CommentPrefix>,
     pub try_parse_dates: bool,
     pub decimal_comma: bool,
+    pub escape_char: Option<u8>,
 }
 
 impl Default for CsvReadOptions {
@@ -106,6 +107,7 @@ impl Default for CsvParseOptions {
             comment_prefix: None,
             try_parse_dates: false,
             decimal_comma: false,
+            escape_char: None,
         }
     }
 }
@@ -118,6 +120,10 @@ impl CsvReadOptions {
     pub fn with_path<P: Into<PathBuf>>(mut self, path: Option<P>) -> Self {
         self.path = path.map(|p| p.into());
         self
+    }
+
+    pub fn with_escape_char(self, c: Option<u8>) -> Self {
+        self.map_parse_options(|opts| opts.with_escape_char(c))
     }
 
     /// Whether to makes the columns contiguous in memory.
@@ -263,6 +269,11 @@ impl CsvParseOptions {
     /// is most often a comma ','.
     pub fn with_separator(mut self, separator: u8) -> Self {
         self.separator = separator;
+        self
+    }
+
+    pub fn with_escape_char(mut self, escape_char: Option<u8>) -> Self {
+        self.escape_char = escape_char;
         self
     }
 

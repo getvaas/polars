@@ -24,9 +24,10 @@ pub(crate) fn get_file_chunks_iterator(
     chunk_size: &mut usize,
     bytes: &[u8],
     quote_char: Option<u8>,
+    escape_char: Option<u8>,
     eol_char: u8,
 ) {
-    let cl = CountLines::new(quote_char, eol_char);
+    let cl = CountLines::new(quote_char, escape_char, eol_char);
 
     for _ in 0..n_chunks {
         let bytes = &bytes[*last_pos..];
@@ -79,6 +80,7 @@ struct ChunkOffsetIter<'a> {
     #[allow(unused)]
     rows_per_batch: usize,
     quote_char: Option<u8>,
+    escape_char: Option<u8>,
     eol_char: u8,
 }
 
@@ -99,6 +101,7 @@ impl Iterator for ChunkOffsetIter<'_> {
                     &mut self.chunk_size,
                     self.bytes,
                     self.quote_char,
+                    self.escape_char,
                     self.eol_char,
                 );
                 match self.offsets.pop_front() {
@@ -123,6 +126,7 @@ impl<'a> CoreReader<'a> {
         let (bytes, starting_point_offset) = self.find_starting_point(
             bytes,
             self.parse_options.quote_char,
+            self.parse_options.escape_char,
             self.parse_options.eol_char,
         )?;
 
@@ -155,6 +159,7 @@ impl<'a> CoreReader<'a> {
             chunk_size,
             rows_per_batch: self.chunk_size,
             quote_char: self.parse_options.quote_char,
+            escape_char: self.parse_options.escape_char,
             eol_char: self.parse_options.eol_char,
         };
 
