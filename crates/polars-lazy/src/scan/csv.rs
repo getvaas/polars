@@ -34,6 +34,10 @@ impl LazyCsvReader {
         self.read_options = self.read_options.map_parse_options(map_func);
         self
     }
+    #[must_use]
+    pub fn with_escape_char(self, c: Option<u8>) -> Self {
+        self.map_parse_options(|opts| opts.with_escape_char(c))
+    }
 
     pub fn new_paths(paths: Arc<[PlPath]>) -> Self {
         Self::new_with_sources(ScanSources::Paths(paths))

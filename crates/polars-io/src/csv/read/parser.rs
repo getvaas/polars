@@ -23,6 +23,7 @@ pub fn count_rows(
     addr: PlPathRef<'_>,
     separator: u8,
     quote_char: Option<u8>,
+    escape_char: Option<u8>,
     comment_prefix: Option<&CommentPrefix>,
     eol_char: u8,
     has_header: bool,
@@ -52,6 +53,7 @@ pub fn count_rows(
         reader_bytes,
         separator,
         quote_char,
+        escape_char,
         comment_prefix,
         eol_char,
         has_header,
@@ -68,6 +70,7 @@ pub fn count_rows_from_slice_par(
     mut bytes: &[u8],
     separator: u8,
     quote_char: Option<u8>,
+    escape_char: Option<u8>,
     comment_prefix: Option<&CommentPrefix>,
     eol_char: u8,
     has_header: bool,
@@ -88,6 +91,7 @@ pub fn count_rows_from_slice_par(
     let start_offset = find_starting_point(
         bytes,
         quote_char,
+        escape_char,
         eol_char,
         // schema_len
         // NOTE: schema_len is normally required to differentiate handling a leading blank line
@@ -114,29 +118,30 @@ pub fn count_rows_from_slice_par(
         None,
         separator,
         quote_char,
+        escape_char
     )
-    .map(|(mean, std)| {
-        let n_rows = (bytes.len() as f32 / (mean - 0.01 * std)) as usize;
-        (n_rows / MIN_ROWS_PER_THREAD).clamp(1, max_threads)
-    })
-    .unwrap_or(1);
+        .map(|(mean, std)| {
+            let n_rows = (bytes.len() as f32 / (mean - 0.01 * std)) as usize;
+            (n_rows / MIN_ROWS_PER_THREAD).clamp(1, max_threads)
+        })
+        .unwrap_or(1);
 
     if n_threads == 1 {
-        return count_rows_from_slice(bytes, quote_char, comment_prefix, eol_char, false);
+        return count_rows_from_slice(bytes, quote_char, escape_char, comment_prefix, eol_char, false);
     }
 
     let file_chunks: Vec<(usize, usize)> =
-        get_file_chunks(bytes, n_threads, None, separator, quote_char, eol_char);
+        get_file_chunks(bytes, n_threads, None, separator, quote_char, escape_char, eol_char);
 
     let iter = file_chunks.into_par_iter().map(|(start, stop)| {
         let bytes = &bytes[start..stop];
 
         if comment_prefix.is_some() {
-            SplitLines::new(bytes, quote_char, eol_char, comment_prefix)
+            SplitLines::new(bytes, quote_char, eol_char, escape_char, comment_prefix)
                 .filter(|line| !is_comment_line(line, comment_prefix))
                 .count()
         } else {
-            CountLines::new(quote_char, eol_char).count(bytes).0
+            CountLines::new(quote_char, escape_char, eol_char).count(bytes).0
                 + bytes.last().is_some_and(|x| *x != b'\n') as usize
         }
     });
@@ -150,6 +155,7 @@ pub fn count_rows_from_slice_par(
 pub fn count_rows_from_slice(
     mut bytes: &[u8],
     quote_char: Option<u8>,
+    escape_char: Option<u8>,
     comment_prefix: Option<&CommentPrefix>,
     eol_char: u8,
     has_header: bool,
@@ -163,11 +169,11 @@ pub fn count_rows_from_slice(
     }
 
     let n = if comment_prefix.is_some() {
-        SplitLines::new(bytes, quote_char, eol_char, comment_prefix)
+        SplitLines::new(bytes, quote_char, eol_char, escape_char, comment_prefix)
             .filter(|line| !is_comment_line(line, comment_prefix))
             .count()
     } else {
-        CountLines::new(quote_char, eol_char).count(bytes).0
+        CountLines::new(quote_char, escape_char, eol_char).count(bytes).0
             + bytes.last().is_some_and(|x| *x != b'\n') as usize
     };
 
@@ -223,6 +229,7 @@ pub(super) fn next_line_position(
     mut expected_fields: Option<usize>,
     separator: u8,
     quote_char: Option<u8>,
+    escape_char: Option<u8>,
     eol_char: u8,
 ) -> Option<usize> {
     fn accept_line(
@@ -231,9 +238,10 @@ pub(super) fn next_line_position(
         separator: u8,
         eol_char: u8,
         quote_char: Option<u8>,
+        escape_char: Option<u8>,
     ) -> bool {
         let mut count = 0usize;
-        for (field, _) in SplitFields::new(line, separator, quote_char, eol_char) {
+        for (field, _) in SplitFields::new(line, separator, quote_char, escape_char, eol_char) {
             if memchr2_iter(separator, eol_char, field).count() >= expected_fields {
                 return false;
             }
@@ -280,16 +288,16 @@ pub(super) fn next_line_position(
         }
         debug_assert!(pos <= input.len());
         let new_input = unsafe { input.get_unchecked(pos..) };
-        let mut lines = SplitLines::new(new_input, quote_char, eol_char, None);
+        let mut lines = SplitLines::new(new_input, quote_char, eol_char, escape_char, None);
         let line = lines.next();
 
         match (line, expected_fields) {
             // count the fields, and determine if they are equal to what we expect from the schema
             (Some(line), Some(expected_fields)) => {
-                if accept_line(line, expected_fields, separator, eol_char, quote_char) {
+                if accept_line(line, expected_fields, separator, eol_char, quote_char, escape_char) {
                     let mut valid = true;
                     for line in lines.take(2) {
-                        if !accept_line(line, expected_fields, separator, eol_char, quote_char) {
+                        if !accept_line(line, expected_fields, separator, eol_char, quote_char, escape_char) {
                             valid = false;
                             break;
                         }
@@ -359,6 +367,7 @@ pub(super) fn get_line_stats(
     expected_fields: Option<usize>,
     separator: u8,
     quote_char: Option<u8>,
+    escape_char: Option<u8>,
 ) -> Option<(f32, f32)> {
     let mut lengths = Vec::with_capacity(n_lines);
 
@@ -375,6 +384,7 @@ pub(super) fn get_line_stats(
             expected_fields,
             separator,
             quote_char,
+            escape_char,
             eol_char,
         )?;
         bytes_trunc = &bytes_trunc[pos + 1..];
@@ -419,6 +429,7 @@ pub(super) struct SplitLines<'a> {
     previous_valid_eols: u64,
     total_index: usize,
     quoting: bool,
+    escape_char: Option<u8>,
     comment_prefix: Option<&'a CommentPrefix>,
 }
 
@@ -438,6 +449,7 @@ impl<'a> SplitLines<'a> {
         slice: &'a [u8],
         quote_char: Option<u8>,
         eol_char: u8,
+        escape_char: Option<u8>,
         comment_prefix: Option<&'a CommentPrefix>,
     ) -> Self {
         let quoting = quote_char.is_some();
@@ -458,6 +470,7 @@ impl<'a> SplitLines<'a> {
             previous_valid_eols: 0,
             total_index: 0,
             quoting,
+            escape_char,
             comment_prefix,
         }
     }
@@ -476,20 +489,34 @@ impl<'a> SplitLines<'a> {
             let mut pos = 0u32;
             let mut iter = self.v.iter();
             let mut in_field = false;
+            let mut esc_run: u32 = 0;
             loop {
                 match iter.next() {
                     Some(&c) => {
                         pos += 1;
 
+                        if let Some(esc) = self.escape_char {
+                            if c == esc {
+                                // contamos escapes consecutivos; se evaluarán al ver la comilla
+                                esc_run = esc_run.saturating_add(1);
+                                continue;
+                            }
+                        }
+
                         if self.quoting && c == self.quote_char {
-                            // toggle between string field enclosure
-                            //      if we encounter a starting '"' -> in_field = true;
-                            //      if we encounter a closing '"' -> in_field = false;
-                            in_field = !in_field;
+                            // alternar solo si la comilla NO está escapada (nº de escapes previos impar)
+                            let escaped = self.escape_char.map(|_| (esc_run & 1) == 1).unwrap_or(false);
+                            if !escaped {
+                                in_field = !in_field;
+                            }
+                            esc_run = 0;
                         }
                         // if we are not in a string and we encounter '\n' we can stop at this position.
                         else if c == self.eol_char && !in_field {
                             break;
+                        } else {
+                            // cualquier otro carácter resetea la racha de escapes
+                            esc_run = 0;
                         }
                     },
                     None => {
@@ -543,6 +570,10 @@ impl<'a> Iterator for SplitLines<'a> {
     #[inline]
     #[cfg(feature = "simd")]
     fn next(&mut self) -> Option<&'a [u8]> {
+        // Si hay escape_char, evitamos la ruta SIMD y usamos el camino escalar.
+        if self.escape_char.is_some() {
+            return self.next_scalar();
+        }
         // First check cached value
         if self.previous_valid_eols != 0 {
             let pos = self.previous_valid_eols.trailing_zeros() as usize;
@@ -668,6 +699,7 @@ pub struct CountLines {
     #[cfg(feature = "simd")]
     simd_quote_char: SimdVec,
     quoting: bool,
+    escape_char: Option<u8>,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -678,7 +710,7 @@ pub struct LineStats {
 }
 
 impl CountLines {
-    pub fn new(quote_char: Option<u8>, eol_char: u8) -> Self {
+    pub fn new(quote_char: Option<u8>, escape_char: Option<u8>, eol_char: u8) -> Self {
         let quoting = quote_char.is_some();
         let quote_char = quote_char.unwrap_or(b'\"');
         #[cfg(feature = "simd")]
@@ -693,6 +725,7 @@ impl CountLines {
             #[cfg(feature = "simd")]
             simd_quote_char,
             quoting,
+            escape_char,
         }
     }
 
@@ -773,7 +806,22 @@ impl CountLines {
 
         while scan_offset < bytes.len() {
             let c = unsafe { *bytes.get_unchecked(scan_offset) };
-            global_quote_parity ^= (c == self.quote_char) & self.quoting;
+
+            // soportar comillas escapadas en la ruta escalar
+            if self.quoting && c == self.quote_char {
+                // contamos escapes consecutivos hacia atrás
+                let mut k = 1usize;
+                let mut esc_count = 0usize;
+                if let Some(esc) = self.escape_char {
+                    while scan_offset >= k && unsafe { *bytes.get_unchecked(scan_offset - k) } == esc {
+                        esc_count += 1;
+                        k += 1;
+                    }
+                }
+                if esc_count % 2 == 0 {
+                    global_quote_parity = !global_quote_parity;
+                }
+            }
 
             let state = &mut states[global_quote_parity as usize];
             state.newline_count += (c == self.eol_char) as usize;
@@ -810,6 +858,10 @@ impl CountLines {
         let mut count = 0;
         let mut position = 0;
         let mut not_in_field_previous_iter = true;
+        // Lleva si terminamos el bloque previo con racha impar de escapes (puede neutralizar la primera comilla del bloque actual).
+        let mut escape_carry_odd = false;
+        // Vector del escape para comparar en SIMD (si aplica).
+        let simd_esc = self.escape_char.map(|c| SimdVec::splat(c));
 
         loop {
             let bytes = unsafe { original_bytes.get_unchecked(total_idx..) };
@@ -824,16 +876,43 @@ impl CountLines {
                 let simd_bytes = SimdVec::from(lane);
                 let eol_mask = simd_bytes.simd_eq(self.simd_eol_char).to_bitmask();
 
-                let valid_eols = if self.quoting {
-                    let quote_mask = simd_bytes.simd_eq(self.simd_quote_char).to_bitmask();
-                    let mut not_in_quote_field = prefix_xorsum_inclusive(quote_mask);
+                // ¿Hay escapes en este bloque?
+                let esc_mask: u64 = if let (true, Some(simd_esc)) = (self.escape_char.is_some(), simd_esc.as_ref()) {
+                    simd_bytes.simd_eq(*simd_esc).to_bitmask()
+                } else { 0 };
 
-                    if not_in_field_previous_iter {
-                        not_in_quote_field = !not_in_quote_field;
+                let valid_eols = if self.quoting {
+                    // Si NO hay escapes en el bloque, podemos usar la ruta SIMD pura.
+                    if esc_mask == 0 {
+                        let mut quote_mask = simd_bytes.simd_eq(self.simd_quote_char).to_bitmask();
+                        // Si venimos con racha impar de escapes, la comilla en el primer byte queda neutralizada.
+                        if escape_carry_odd && (quote_mask & 1) != 0 {
+                            quote_mask &= !1;
+                        }
+                        let mut not_in_quote_field = prefix_xorsum_inclusive(quote_mask);
+                        if not_in_field_previous_iter {
+                            not_in_quote_field = !not_in_quote_field;
+                        }
+                        not_in_field_previous_iter = (not_in_quote_field & (1 << (SIMD_SIZE - 1))) > 0;
+                        escape_carry_odd = false; // en este bloque no hubo escapes
+                        eol_mask & not_in_quote_field
+                    } else {
+                        // Fallback escalar SOLO para este bloque (conservando estado de entrada/salida).
+                        let start_in_field = !not_in_field_previous_iter;
+                        let (c, o, end_in_field, end_escape_odd) =
+                            self.count_no_simd_with_state(&lane, start_in_field, escape_carry_odd);
+                        if c > 0 {
+                            count += c;
+                            position = total_idx + o;
+                        }
+                        not_in_field_previous_iter = !end_in_field;
+                        escape_carry_odd = end_escape_odd;
+                        // Ya avanzamos este bloque de forma escalar; saltamos al siguiente.
+                        total_idx += SIMD_SIZE;
+                        continue;
                     }
-                    not_in_field_previous_iter = (not_in_quote_field & (1 << (SIMD_SIZE - 1))) > 0;
-                    eol_mask & not_in_quote_field
                 } else {
+                    // Sin comillas: la máscara de EOL vale tal cual.
                     eol_mask
                 };
 
@@ -847,18 +926,50 @@ impl CountLines {
                 debug_assert!(count == 0 || original_bytes[position] == self.eol_char);
                 return (count, position);
             } else {
-                let (c, o) = self.count_no_simd(bytes, !not_in_field_previous_iter);
-
-                let (count, position) = if c > 0 {
-                    (count + c, total_idx + o)
-                } else {
-                    (count, position)
-                };
+                // Tramo final (<64B): ruta escalar con estado (incluye escapes y dentro/fuera de comillas).
+                let start_in_field = !not_in_field_previous_iter;
+                let (c, o, _end_in_field, _end_escape_odd) =
+                    self.count_no_simd_with_state(bytes, start_in_field, escape_carry_odd);
+                if c > 0 {
+                    count += c;
+                    position = total_idx + o;
+                }
                 debug_assert!(count == 0 || original_bytes[position] == self.eol_char);
-
                 return (count, position);
             }
         }
+    }
+
+    // Helper: versión escalar que conserva estado de comillas y racha impar de escapes.
+    fn count_no_simd_with_state(
+        &self,
+        bytes: &[u8],
+        mut in_field: bool,
+        mut esc_run_odd: bool,
+    ) -> (usize, usize, bool, bool) {
+        let mut count = 0usize;
+        let mut position = 0usize;
+        for (i, &c) in bytes.iter().enumerate() {
+            if let Some(esc) = self.escape_char {
+                if c == esc {
+                    esc_run_odd = !esc_run_odd;
+                    continue;
+                }
+            }
+            if self.quoting && c == self.quote_char {
+                if !esc_run_odd {
+                    in_field = !in_field;
+                }
+                esc_run_odd = false;
+            } else if c == self.eol_char && !in_field {
+                position = i;
+                count += 1;
+                esc_run_odd = false;
+            } else {
+                esc_run_odd = false;
+            }
+        }
+        (count, position, in_field, esc_run_odd)
     }
 
     #[cfg(not(feature = "simd"))]
@@ -871,19 +982,33 @@ impl CountLines {
         let mut in_field = in_field;
         let mut count = 0;
         let mut position = 0;
+        let mut esc_run: u32 = 0;
 
         for b in iter {
             let c = *b;
+            if let Some(esc) = self.escape_char {
+                if c == esc {
+                    esc_run = esc_run.saturating_add(1);
+                    continue;
+                }
+            }
             if self.quoting && c == self.quote_char {
                 // toggle between string field enclosure
                 //      if we encounter a starting '"' -> in_field = true;
                 //      if we encounter a closing '"' -> in_field = false;
-                in_field = !in_field;
+                let escaped = self.escape_char.map(|_| (esc_run & 1) == 1).unwrap_or(false);
+                if !escaped {
+                    in_field = !in_field;
+                }
+                esc_run = 0;
             }
             // If we are not in a string and we encounter '\n' we can stop at this position.
             else if c == self.eol_char && !in_field {
                 position = (b as *const _ as usize) - (bytes.as_ptr() as usize);
                 count += 1;
+                esc_run = 0;
+            } else {
+                esc_run = 0;
             }
         }
         debug_assert!(count == 0 || bytes[position] == self.eol_char);
@@ -916,16 +1041,50 @@ fn find_quoted(bytes: &[u8], quote_char: u8, needle: u8) -> Option<usize> {
 }
 
 #[inline]
-pub(super) fn skip_this_line(bytes: &[u8], quote: Option<u8>, eol_char: u8) -> &[u8] {
-    let pos = match quote {
-        Some(quote) => find_quoted(bytes, quote, eol_char),
-        None => bytes.iter().position(|x| *x == eol_char),
-    };
-    match pos {
-        None => &[],
-        Some(pos) => &bytes[pos + 1..],
+pub(super) fn skip_this_line(
+    bytes: &[u8],
+    quote: Option<u8>,
+    escape_char: Option<u8>,
+    eol_char: u8) -> &[u8] {
+        match (quote, escape_char) {
+            (Some(q), Some(esc)) => {
+                let mut in_field = false;
+                let mut esc_run: u32 = 0;
+                for (i, &c) in bytes.iter().enumerate() {
+                    if c == esc {
+                        esc_run = esc_run.saturating_add(1);
+                        continue;
+                    }
+                    if c == q {
+                        let escaped = (esc_run & 1) == 1;
+                        if !escaped {
+                            in_field = !in_field;
+                        }
+                        esc_run = 0;
+                    } else if c == eol_char && !in_field {
+                        return &bytes[i + 1..];
+                    } else {
+                        esc_run = 0;
+                    }
+                }
+                &[]
+            }
+            (Some(q), None) => {
+                if let Some(pos) = find_quoted(bytes, q, eol_char) {
+                    &bytes[pos + 1..]
+                } else {
+                    &[]
+                }
+            }
+            (None, _) => {
+                if let Some(pos) = bytes.iter().position(|x| *x == eol_char) {
+                    &bytes[pos + 1..]
+                } else {
+                    &[]
+                }
+            }
+        }
     }
-}
 
 #[inline]
 pub(super) fn skip_this_line_naive(input: &[u8], eol_char: u8) -> &[u8] {
@@ -1005,6 +1164,7 @@ pub(super) fn parse_lines(
             bytes,
             parse_options.separator,
             parse_options.quote_char,
+            parse_options.escape_char,
             parse_options.eol_char,
         );
         let mut idx = 0u32;
@@ -1038,22 +1198,57 @@ pub(super) fn parse_lines(
                         };
                         let mut add_null = false;
 
-                        // if we have null values argument, check if this field equal null value
-                        if let Some(null_values) = null_values {
-                            let field = if needs_escaping && !field.is_empty() {
-                                unsafe { field.get_unchecked(1..field.len() - 1) }
-                            } else {
-                                field
-                            };
-
-                            // SAFETY:
-                            // process fields is in bounds
-                            add_null = unsafe { null_values.is_null(field, idx as usize) }
+                        // ----- NUEVO: preparar vista interna y des-escapar \" si corresponde -----
+                        // inner = contenido sin comillas externas cuando el campo fue quoted
+                        let mut inner = field;
+                        if needs_escaping && !field.is_empty() {
+                            inner = unsafe { inner.get_unchecked(1..field.len() - 1) };
                         }
+
+                        // Si hay escape_char y quote_char, convertir secuencias \" -> " dentro de inner.
+                        // Guardamos el resultado en owned_unescaped si hicimos cambios.
+                        let mut owned_unescaped: Option<Vec<u8>> = None;
+                        if needs_escaping {
+                                if let (Some(esc), Some(qc)) = (parse_options.escape_char, parse_options.quote_char) {
+                                    let mut v = Vec::with_capacity(inner.len());
+                                    let mut i = 0usize;
+                                    while i < inner.len() {
+                                        let b = unsafe { *inner.get_unchecked(i) };
+                                        if b == esc && i + 1 < inner.len() {
+                                            let nxt = unsafe { *inner.get_unchecked(i + 1) };
+                                            if nxt == qc {
+                                                v.push(qc); // \" -> "
+                                                i += 2;
+                                                continue;
+                                            }
+                                        }
+                                        v.push(b);
+                                        i += 1;
+                                    }
+                                    owned_unescaped = Some(v);
+                                }
+                            }
+
+                        // if we have null values argument, check if this field equals null value
+                        if let Some(null_values) = null_values {
+                                let field_for_null = if let Some(ref v) = owned_unescaped {
+                                    v.as_slice()
+                                } else {
+                                    inner
+                                };
+                                // SAFETY: process fields is in bounds
+                                add_null = unsafe { null_values.is_null(field_for_null, idx as usize) }
+                            }
                         if add_null {
                             buf.add_null(!parse_options.missing_is_null && field.is_empty())
                         } else {
-                            buf.add(field, ignore_errors, needs_escaping, parse_options.missing_is_null)
+                            // Elegimos qué bytes escribir y si aún hace falta marcar needs_escaping
+                            let (to_write, needs_escaping_out) = if let Some(ref v) = owned_unescaped {
+                                    (v.as_slice(), false) // ya removimos comillas externas y des-escapes
+                                } else {
+                                (field, needs_escaping)
+                            };
+                            buf.add(to_write, ignore_errors, needs_escaping_out, parse_options.missing_is_null)
                                 .map_err(|e| {
                                     let bytes_offset = offset + field.as_ptr() as usize - start;
                                     let unparsable = String::from_utf8_lossy(field);
@@ -1096,6 +1291,7 @@ Consider setting 'truncate_ragged_lines={}'."#, polars_error::constants::TRUE)
                                     let bytes_rem = skip_this_line(
                                         unsafe { bytes.get_unchecked(read_sol - 1..) },
                                         parse_options.quote_char,
+                                        parse_options.escape_char,
                                         parse_options.eol_char,
                                     );
                                     bytes = bytes_rem;
@@ -1132,13 +1328,13 @@ mod test {
     #[test]
     fn test_splitlines() {
         let input = "1,\"foo\n\"\n2,\"foo\n\"\n";
-        let mut lines = SplitLines::new(input.as_bytes(), Some(b'"'), b'\n', None);
+        let mut lines = SplitLines::new(input.as_bytes(), Some(b'"'), b'\n', None, None);
         assert_eq!(lines.next(), Some("1,\"foo\n\"".as_bytes()));
         assert_eq!(lines.next(), Some("2,\"foo\n\"".as_bytes()));
         assert_eq!(lines.next(), None);
 
         let input2 = "1,'foo\n'\n2,'foo\n'\n";
-        let mut lines2 = SplitLines::new(input2.as_bytes(), Some(b'\''), b'\n', None);
+        let mut lines2 = SplitLines::new(input2.as_bytes(), Some(b'\''), b'\n', None, None);
         assert_eq!(lines2.next(), Some("1,'foo\n'".as_bytes()));
         assert_eq!(lines2.next(), Some("2,'foo\n'".as_bytes()));
         assert_eq!(lines2.next(), None);
