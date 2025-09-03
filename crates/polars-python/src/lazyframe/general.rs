@@ -151,7 +151,7 @@ impl PyLazyFrame {
     #[staticmethod]
     #[cfg(feature = "csv")]
     #[pyo3(signature = (source, sources, separator, has_header, ignore_errors, skip_rows, skip_lines, n_rows, cache, overwrite_dtype,
-        low_memory, comment_prefix, quote_char, null_values, missing_utf8_is_empty_string,
+        low_memory, comment_prefix, quote_char, escape_char, null_values, missing_utf8_is_empty_string,
         infer_schema_length, with_schema_modify, rechunk, skip_rows_after_header,
         encoding, row_index, try_parse_dates, eol_char, raise_if_empty, truncate_ragged_lines, decimal_comma, glob, schema,
         cloud_options, credential_provider, retries, file_cache_ttl, include_file_paths
@@ -171,6 +171,7 @@ impl PyLazyFrame {
         low_memory: bool,
         comment_prefix: Option<&str>,
         quote_char: Option<&str>,
+        escape_char: Option<&str>,
         null_values: Option<Wrap<NullValues>>,
         missing_utf8_is_empty_string: bool,
         infer_schema_length: Option<usize>,
@@ -197,6 +198,7 @@ impl PyLazyFrame {
 
         let null_values = null_values.map(|w| w.0);
         let quote_char = quote_char.and_then(|s| s.as_bytes().first()).copied();
+        let escape_char = escape_char.and_then(|s| s.as_bytes().first()).copied();
         let separator = separator
             .as_bytes()
             .first()
@@ -260,6 +262,7 @@ impl PyLazyFrame {
             .with_low_memory(low_memory)
             .with_comment_prefix(comment_prefix.map(|x| x.into()))
             .with_quote_char(quote_char)
+            .with_escape_char(escape_char)
             .with_eol_char(eol_char)
             .with_rechunk(rechunk)
             .with_skip_rows_after_header(skip_rows_after_header)

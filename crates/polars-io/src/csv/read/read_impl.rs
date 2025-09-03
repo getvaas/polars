@@ -180,6 +180,7 @@ impl<'a> CoreReader<'a> {
                 total_n_rows,
                 separator,
                 parse_options.quote_char,
+                parse_options.escape_char,
                 parse_options.eol_char,
             ) {
                 reader_bytes = ReaderBytes::Owned(b.into());
@@ -257,11 +258,13 @@ impl<'a> CoreReader<'a> {
         &self,
         bytes: &'b [u8],
         quote_char: Option<u8>,
+        escape_char: Option<u8>,
         eol_char: u8,
     ) -> PolarsResult<(&'b [u8], Option<usize>)> {
         let i = find_starting_point(
             bytes,
             quote_char,
+            escape_char,
             eol_char,
             self.schema.len(),
             self.skip_lines,
@@ -324,6 +327,7 @@ impl<'a> CoreReader<'a> {
         let (bytes, _) = self.find_starting_point(
             bytes,
             self.parse_options.quote_char,
+            self.parse_options.escape_char,
             self.parse_options.eol_char,
         )?;
 
@@ -391,7 +395,11 @@ impl<'a> CoreReader<'a> {
         #[cfg(target_family = "wasm")]
         let pool = &POOL;
 
-        let counter = CountLines::new(self.parse_options.quote_char, self.parse_options.eol_char);
+        let counter = CountLines::new(
+            self.parse_options.quote_char,
+            self.parse_options.escape_char,
+            self.parse_options.eol_char,
+        );
         let mut total_offset = 0;
         let mut previous_total_offset = 0;
         let check_utf8 = matches!(self.parse_options.encoding, CsvEncoding::Utf8)
@@ -596,6 +604,7 @@ pub fn read_chunk(
 pub fn find_starting_point(
     mut bytes: &[u8],
     quote_char: Option<u8>,
+    escape_char: Option<u8>,
     eol_char: u8,
     schema_len: usize,
     skip_lines: usize,
@@ -624,7 +633,7 @@ pub fn find_starting_point(
 
     // skip 'n' leading rows
     if skip_rows_before_header > 0 {
-        let mut split_lines = SplitLines::new(bytes, quote_char, eol_char, comment_prefix);
+        let mut split_lines = SplitLines::new(bytes, quote_char, eol_char, escape_char, comment_prefix);
         let mut current_line = &bytes[..0];
 
         for _ in 0..skip_rows_before_header {
@@ -646,11 +655,11 @@ pub fn find_starting_point(
 
     // skip header row
     if has_header {
-        bytes = skip_this_line(bytes, quote_char, eol_char);
+        bytes = skip_this_line(bytes, quote_char, escape_char, eol_char);
     }
     // skip 'n' rows following the header
     if skip_rows_after_header > 0 {
-        let mut split_lines = SplitLines::new(bytes, quote_char, eol_char, comment_prefix);
+        let mut split_lines = SplitLines::new(bytes, quote_char, eol_char, escape_char, comment_prefix);
         let mut current_line = &bytes[..0];
 
         for _ in 0..skip_rows_after_header {

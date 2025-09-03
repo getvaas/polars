@@ -22,7 +22,7 @@ impl PyDataFrame {
     #[pyo3(signature = (
     py_f, infer_schema_length, chunk_size, has_header, ignore_errors, n_rows,
     skip_rows, skip_lines, projection, separator, rechunk, columns, encoding, n_threads, path,
-    overwrite_dtype, overwrite_dtype_slice, low_memory, comment_prefix, quote_char,
+    overwrite_dtype, overwrite_dtype_slice, low_memory, comment_prefix, quote_char, escape_char,
     null_values, missing_utf8_is_empty_string, try_parse_dates, skip_rows_after_header,
     row_index, eol_char, raise_if_empty, truncate_ragged_lines, decimal_comma, schema)
 )]
@@ -48,6 +48,7 @@ impl PyDataFrame {
         low_memory: bool,
         comment_prefix: Option<&str>,
         quote_char: Option<&str>,
+        escape_char: Option<&str>,
         null_values: Option<Wrap<NullValues>>,
         missing_utf8_is_empty_string: bool,
         try_parse_dates: bool,
@@ -66,6 +67,7 @@ impl PyDataFrame {
             offset,
         });
         let quote_char = quote_char.and_then(|s| s.as_bytes().first().copied());
+        let escape_char = escape_char.and_then(|s| s.as_bytes().first().copied());
 
         let overwrite_dtype = overwrite_dtype.map(|overwrite_dtype| {
             overwrite_dtype
@@ -115,6 +117,7 @@ impl PyDataFrame {
                         .with_null_values(null_values)
                         .with_try_parse_dates(try_parse_dates)
                         .with_quote_char(quote_char)
+                        .with_escape_char(escape_char)
                         .with_eol_char(eol_char)
                         .with_truncate_ragged_lines(truncate_ragged_lines)
                         .with_decimal_comma(decimal_comma),

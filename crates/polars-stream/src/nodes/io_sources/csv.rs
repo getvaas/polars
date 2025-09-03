@@ -273,6 +273,7 @@ impl FileReader for CsvFileReader {
                 memslice: memslice.clone(),
                 line_counter: CountLines::new(
                     self.options.parse_options.quote_char,
+                    self.options.parse_options.escape_char,
                     self.options.parse_options.eol_char,
                 ),
                 line_batch_tx,
@@ -477,6 +478,7 @@ impl LineBatchSource {
             let parse_options = options.parse_options.as_ref();
 
             let quote_char = parse_options.quote_char;
+            let escape_char = parse_options.escape_char;
             let eol_char = parse_options.eol_char;
 
             let skip_lines = options.skip_lines;
@@ -488,6 +490,7 @@ impl LineBatchSource {
             find_starting_point(
                 global_bytes,
                 quote_char,
+                escape_char,
                 eol_char,
                 file_schema_len,
                 skip_lines,
@@ -724,6 +727,7 @@ impl ChunkReader {
 
 struct CountLinesWithComments {
     quote_char: Option<u8>,
+    escape_char: Option<u8>,
     eol_char: u8,
     comment_prefix: CommentPrefix,
 }
@@ -735,6 +739,7 @@ impl CountLinesWithComments {
             .clone()
             .map(|comment_prefix| CountLinesWithComments {
                 quote_char: parse_options.quote_char,
+                escape_char: parse_options.escape_char,
                 eol_char: parse_options.eol_char,
                 comment_prefix,
             })
@@ -744,6 +749,7 @@ impl CountLinesWithComments {
         count_rows_from_slice(
             bytes,
             self.quote_char,
+            self.escape_char,
             Some(&self.comment_prefix),
             self.eol_char,
             false, // has_header

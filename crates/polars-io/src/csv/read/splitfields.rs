@@ -1,6 +1,7 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 #[cfg(not(feature = "simd"))]
 mod inner {
+    /// An adapted version of std::iter::Split with optional escape support.
     /// An adapted version of std::iter::Split.
     /// This exists solely because we cannot split the lines naively as
     pub(crate) struct SplitFields<'a> {
@@ -9,6 +10,7 @@ mod inner {
         finished: bool,
         quote_char: u8,
         quoting: bool,
+        escape_char: Option<u8>,
         eol_char: u8,
     }
 
@@ -17,6 +19,7 @@ mod inner {
             slice: &'a [u8],
             separator: u8,
             quote_char: Option<u8>,
+            escape_char: Option<u8>,
             eol_char: u8,
         ) -> Self {
             Self {
@@ -25,6 +28,7 @@ mod inner {
                 finished: false,
                 quote_char: quote_char.unwrap_or(b'"'),
                 quoting: quote_char.is_some(),
+                escape_char,
                 eol_char,
             }
         }
@@ -69,24 +73,35 @@ mod inner {
             // we have checked bounds
             let pos = if self.quoting && unsafe { *self.v.get_unchecked(0) } == self.quote_char {
                 needs_escaping = true;
-                // There can be pair of double-quotes within string.
-                // Each of the embedded double-quote characters must be represented
-                // by a pair of double-quote characters:
-                // e.g. 1997,Ford,E350,"Super, ""luxurious"" truck",20020
+                // Campo entrecomillado. Respetar escapes: una comilla precedida por
+                // un número IMPAR de escapes NO alterna in_field.
+                let mut in_field = false; // arrancamos fuera; la 1ª comilla abre
+                let mut esc_run: usize = 0;
 
-                // denotes if we are in a string field, started with a quote
-                let mut in_field = false;
-
-                let mut idx = 0u32;
-                let mut current_idx = 0u32;
+                let mut idx: usize = usize::MAX;
+                let mut current_idx: usize = 0;
                 // micro optimizations
                 #[allow(clippy::explicit_counter_loop)]
                 for &c in self.v.iter() {
+                    if let Some(esc) = self.escape_char {
+                        if c == esc {
+                            esc_run = esc_run.saturating_add(1);
+                            current_idx += 1;
+                            continue;
+                        }
+                    }
                     if c == self.quote_char {
-                        // toggle between string field enclosure
-                        //      if we encounter a starting '"' -> in_field = true;
-                        //      if we encounter a closing '"' -> in_field = false;
-                        in_field = !in_field;
+                        let escaped = self
+                            .escape_char
+                            .map(|_| (esc_run & 1) == 1)
+                            .unwrap_or(false);
+                        if !escaped {
+                            in_field = !in_field;
+                        }
+                        esc_run = 0;
+                    } else {
+                        // cualquier otro byte corta la racha de escapes
+                        esc_run = 0;
                     }
 
                     if !in_field && self.eof_eol(c) {
@@ -103,11 +118,11 @@ mod inner {
                     current_idx += 1;
                 }
 
-                if idx == 0 {
+                if idx == usize::MAX {
                     return self.finish(needs_escaping);
                 }
 
-                idx as usize
+                idx
             } else {
                 match self.v.iter().position(|&c| self.eof_eol(c)) {
                     None => return self.finish(needs_escaping),
@@ -152,6 +167,7 @@ mod inner {
         pub finished: bool,
         quote_char: u8,
         quoting: bool,
+        escape_char: Option<u8>,
         eol_char: u8,
         simd_separator: SimdVec,
         simd_eol_char: SimdVec,
@@ -160,10 +176,12 @@ mod inner {
     }
 
     impl<'a> SplitFields<'a> {
+        /// Nuevo constructor con escape_char.
         pub(crate) fn new(
             slice: &'a [u8],
             separator: u8,
             quote_char: Option<u8>,
+            escape_char: Option<u8>,
             eol_char: u8,
         ) -> Self {
             let simd_separator = SimdVec::splat(separator);
@@ -178,6 +196,7 @@ mod inner {
                 finished: false,
                 quote_char,
                 quoting,
+                escape_char,
                 eol_char,
                 simd_separator,
                 simd_eol_char,
@@ -213,6 +232,75 @@ mod inner {
 
         #[inline]
         fn next(&mut self) -> Option<(&'a [u8], bool)> {
+            // Si hay escape_char, evitamos ruta SIMD y usamos una ruta escalar local.
+            if self.escape_char.is_some() {
+                if self.finished {
+                    return None;
+                } else if self.v.is_empty() {
+                    return self.finish(false);
+                }
+
+                let mut needs_escaping = false;
+                 let pos = if self.quoting && unsafe { *self.v.get_unchecked(0) } == self.quote_char
+                 {
+                    needs_escaping = true;
+                    let mut in_field = false; // estamos fuera; la 1ª comilla abre
+                    let mut esc_run: usize = 0;
+
+                    let mut idx = usize::MAX;
+                    let mut cur = 0usize;
+                    for &c in self.v.iter() {
+                        if let Some(esc) = self.escape_char {
+                            if c == esc {
+                                esc_run = esc_run.saturating_add(1);
+                                cur += 1;
+                                continue;
+                            }
+                        }
+                        if c == self.quote_char {
+                            let escaped =
+                                self.escape_char.map(|_| (esc_run & 1) == 1).unwrap_or(false);
+                            if !escaped {
+                                in_field = !in_field;
+                            }
+                            esc_run = 0;
+                        } else {
+                            esc_run = 0;
+                        }
+
+                        if !in_field && (c == self.separator || c == self.eol_char) {
+                            idx = cur;
+                            break;
+                        }
+                        cur += 1;
+                    }
+
+                    if idx == usize::MAX {
+                        return self.finish(needs_escaping);
+                    }
+                    idx
+                } else {
+                    match self.v.iter().position(|&c| c == self.separator || c == self.eol_char) {
+                        None => return self.finish(needs_escaping),
+                        Some(idx) => {
+                            unsafe {
+                                if *self.v.get_unchecked(idx) == self.eol_char {
+                                    return self.finish_eol(needs_escaping, idx);
+                                }
+                            }
+                            idx
+                        }
+                    }
+                };
+
+                unsafe {
+                    debug_assert!(pos < self.v.len());
+                    let ret = Some((self.v.get_unchecked(..pos), needs_escaping));
+                    self.v = self.v.get_unchecked(pos + 1..);
+                    return ret;
+                }
+            }
+
             // This must be before we check the cached value
             if self.finished {
                 return None;
@@ -412,18 +500,45 @@ mod test {
     #[test]
     fn test_splitfields() {
         let input = "\"foo\",\"bar\"";
-        let mut fields = SplitFields::new(input.as_bytes(), b',', Some(b'"'), b'\n');
+        let mut fields = SplitFields::new(input.as_bytes(), b',', Some(b'"'), None, b'\n');
 
         assert_eq!(fields.next(), Some(("\"foo\"".as_bytes(), true)));
         assert_eq!(fields.next(), Some(("\"bar\"".as_bytes(), true)));
         assert_eq!(fields.next(), None);
 
         let input2 = "\"foo\n bar\";\"baz\";12345";
-        let mut fields2 = SplitFields::new(input2.as_bytes(), b';', Some(b'"'), b'\n');
+        let mut fields2 = SplitFields::new(input2.as_bytes(), b';', Some(b'"'), None, b'\n');
 
         assert_eq!(fields2.next(), Some(("\"foo\n bar\"".as_bytes(), true)));
         assert_eq!(fields2.next(), Some(("\"baz\"".as_bytes(), true)));
         assert_eq!(fields2.next(), Some(("12345".as_bytes(), false)));
         assert_eq!(fields2.next(), None);
+    }
+
+    #[test]
+    fn test_splitfields_with_escape() {
+        // campo 1 con comillas escapadas \" y separador coma
+        let input = "\"a \\\"quote\\\" here\",x\n";
+        let mut it = SplitFields::new(input.as_bytes(), b',', Some(b'"'), Some(b'\\'), b'\n');
+        assert_eq!(it.next(), Some(("\"a \\\"quote\\\" here\"".as_bytes(), true)));
+        assert_eq!(it.next(), Some(("x".as_bytes(), false)));
+        assert_eq!(it.next(), None);
+    }
+
+    #[test]
+    fn test_splitfields_escape_parity() {
+        // 1 escape (impar): la comilla NO debe alternar (se mantiene dentro)
+        let s1 = "\"a \\\"q\\\" here\",b\n";
+        let mut it1 = SplitFields::new(s1.as_bytes(), b',', Some(b'"'), Some(b'\\'), b'\n');
+        assert_eq!(it1.next(), Some(("\"a \\\"q\\\" here\"".as_bytes(), true)));
+        assert_eq!(it1.next(), Some(("b".as_bytes(), false)));
+        assert_eq!(it1.next(), None);
+
+        // 2 escapes (par): la comilla SÍ alterna
+        let s2 = "\"a \\\\\"q\\\\\" end\",b\n"; // \\\\" -> dos backslashes antes de "
+        let mut it2 = SplitFields::new(s2.as_bytes(), b',', Some(b'"'), Some(b'\\'), b'\n');
+        assert_eq!(it2.next(), Some(("\"a \\\\\"q\\\\\" end\"".as_bytes(), true)));
+        assert_eq!(it2.next(), Some(("b".as_bytes(), false)));
+        assert_eq!(it2.next(), None);
     }
 }

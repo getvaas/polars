@@ -17,6 +17,7 @@ pub(crate) fn get_file_chunks(
     expected_fields: Option<usize>,
     separator: u8,
     quote_char: Option<u8>,
+    escape_char: Option<u8>,
     eol_char: u8,
 ) -> Vec<(usize, usize)> {
     let mut last_pos = 0;
@@ -35,6 +36,7 @@ pub(crate) fn get_file_chunks(
             expected_fields,
             separator,
             quote_char,
+            escape_char,
             eol_char,
         ) {
             Some(pos) => search_pos + pos,
@@ -55,6 +57,7 @@ fn decompress_impl<R: Read>(
     n_rows: Option<usize>,
     separator: u8,
     quote_char: Option<u8>,
+    escape_char: Option<u8>,
     eol_char: u8,
 ) -> Option<Vec<u8>> {
     let chunk_size = 4096;
@@ -85,7 +88,7 @@ fn decompress_impl<R: Read>(
                     }
                     // now that we have enough, we compute the number of fields (also takes embedding into account)
                     expected_fields =
-                        SplitFields::new(&out, separator, quote_char, eol_char).count();
+                        SplitFields::new(&out, separator, quote_char, escape_char, eol_char).count();
                     break;
                 }
             }
@@ -96,15 +99,16 @@ fn decompress_impl<R: Read>(
             // keep track of the n_rows we read
             while line_count < n_rows {
                 match next_line_position(
-                    &out[buf_pos + 1..],
+                    &out[buf_pos..],
                     Some(expected_fields),
                     separator,
                     quote_char,
+                    escape_char,
                     eol_char,
                 ) {
                     Some(pos) => {
                         line_count += 1;
-                        buf_pos += pos;
+                        buf_pos += pos + 1;
                     },
                     None => {
                         // take more bytes so that we might find a new line the next iteration
@@ -131,6 +135,7 @@ pub(crate) fn decompress(
     n_rows: Option<usize>,
     separator: u8,
     quote_char: Option<u8>,
+    escape_char: Option<u8>,
     eol_char: u8,
 ) -> Option<Vec<u8>> {
     use crate::utils::compression::SupportedCompression;
@@ -139,15 +144,15 @@ pub(crate) fn decompress(
         match algo {
             SupportedCompression::GZIP => {
                 let mut decoder = flate2::read::MultiGzDecoder::new(bytes);
-                decompress_impl(&mut decoder, n_rows, separator, quote_char, eol_char)
+                decompress_impl(&mut decoder, n_rows, separator, quote_char, escape_char, eol_char)
             },
             SupportedCompression::ZLIB => {
                 let mut decoder = flate2::read::ZlibDecoder::new(bytes);
-                decompress_impl(&mut decoder, n_rows, separator, quote_char, eol_char)
+                decompress_impl(&mut decoder, n_rows, separator, quote_char, escape_char, eol_char)
             },
             SupportedCompression::ZSTD => {
                 let mut decoder = zstd::Decoder::with_buffer(bytes).ok()?;
-                decompress_impl(&mut decoder, n_rows, separator, quote_char, eol_char)
+                decompress_impl(&mut decoder, n_rows, separator, quote_char, escape_char, eol_char)
             },
         }
     } else {
@@ -199,10 +204,10 @@ mod test {
         let bytes = s.as_bytes();
         // can be within -1 / +1 bounds.
         assert!(
-            (get_file_chunks(bytes, 10, Some(4), b',', None, b'\n').len() as i32 - 10).abs() <= 1
+            (get_file_chunks(bytes, 10, Some(4), b',', None, None, b'\n').len() as i32 - 10).abs() <= 1
         );
         assert!(
-            (get_file_chunks(bytes, 8, Some(4), b',', None, b'\n').len() as i32 - 8).abs() <= 1
+            (get_file_chunks(bytes, 8, Some(4), b',', None, None, b'\n').len() as i32 - 8).abs() <= 1
         );
     }
 }
